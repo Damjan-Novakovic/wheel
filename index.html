@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spin the Wheel</title>
+<style>
+:root{--bg:#0f1226;--card:#1b1f3b;--ink:#f4f5ff;--mute:#9aa0c8;--acc:#ff4d8d;--acc2:#7c5cff;--ok:#2ee59d}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh}
+a{color:inherit}
+.center{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;text-align:center;padding:20px}
+h1{margin:0;font-size:2.4rem}
+.btn{border:0;border-radius:14px;padding:14px 22px;font-size:1rem;font-weight:700;cursor:pointer;color:#fff;background:linear-gradient(135deg,var(--acc),var(--acc2));text-decoration:none;display:inline-block}
+.btn.alt{background:#2a2f55}
+.btn:disabled{opacity:.5}
+/* admin */
+.wrap{max-width:1000px;margin:0 auto;padding:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--card);border:2px solid transparent;border-radius:18px;padding:14px}
+.card.on{border-color:var(--acc)}
+.card label.pick{display:flex;align-items:center;gap:8px;font-weight:700;margin-bottom:8px}
+input[type=text],textarea,select{width:100%;background:#12152c;color:var(--ink);border:1px solid #343a6e;border-radius:10px;padding:10px;font-size:1rem}
+textarea{height:170px;resize:vertical}
+h2{font-size:1.1rem;margin:22px 0 10px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row>*{flex:1;min-width:150px}
+.small{color:var(--mute);font-size:.85rem}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#666;margin-right:6px}
+.dot.ok{background:var(--ok)}
+#log{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px}
+#log li{background:#2a2f55;border-radius:999px;padding:6px 14px}
+/* board */
+#boardRoot{height:100vh;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;background:radial-gradient(circle at 50% 40%,#232863,#0b0d1f)}
+canvas{max-width:96vw;max-height:96vh}
+#win{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(5,6,20,.82);flex-direction:column;gap:10px;text-align:center;padding:20px}
+#win .n{font-size:min(14vw,9rem);font-weight:900;background:linear-gradient(135deg,#ffd166,var(--acc));-webkit-background-clip:text;background-clip:text;color:transparent;word-break:break-word;animation:pop .5s}
+#win .t{font-size:2rem;color:var(--mute)}
+@keyframes pop{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
+#code{position:absolute;bottom:8px;right:12px;color:#4d5390;font-size:.8rem}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const mode=location.hash.replace('#','');
+addEventListener('hashchange',()=>location.reload());
+const bc='BroadcastChannel' in window?new BroadcastChannel('spinwheel'):null;
+const COLORS=['#ff4d8d','#7c5cff','#18c5ff','#2ee59d','#ffd166','#ff8a4c','#c15cff','#4cd964'];
+const uid=()=>Date.now()+'-'+Math.random();
+const clean=t=>t.split('\n').map(s=>s.trim()).filter(Boolean);
+
+if(mode==='admin') admin(); else if(mode==='board') board(); else landing();
+
+function landing(){
+  $('#app').innerHTML=`<div class="center"><h1>🎡 Spin the Wheel</h1>
+  <p class="small">Open the Admin on your device and the Board on the smartboard.</p>
+  <div class="row" style="justify-content:center"><a class="btn" href="#admin">I am the teacher (Admin)</a><a class="btn alt" href="#board">Smartboard</a></div></div>`;
+}
+
+/* ---------------- ADMIN ---------------- */
+function admin(){
+  const saved=JSON.parse(localStorage.getItem('wheels')||'null')||{
+    a:{name:'Class A',names:'Ana\nBen\nCara\nDavid'},b:{name:'Class B',names:'Eli\nFay\nGus\nHana'},active:'a',remove:false};
+  const save=()=>localStorage.setItem('wheels',JSON.stringify(saved));
+  const lists=()=>({a:clean(saved.a.names),b:clean(saved.b.names)});
+  const names=k=>{const l=lists();return k==='a'?l.a:k==='b'?l.b:[...l.a,...l.b]};
+  const label=k=>k==='a'?saved.a.name:k==='b'?saved.b.name:'Everyone';
+  let conn=null,peer=null,seen={};
+  $('#app').innerHTML=`<div class="wrap"><h1>🎛️ Admin</h1>
+  <h2>1. Pick which wheel the board shows</h2>
+  <div class="grid">
+   ${['a','b'].map(k=>`<div class="card" id="c${k}"><label class="pick"><input type="radio" name="w" value="${k}"> Show this wheel</label>
+     <input type="text" id="n${k}" placeholder="Wheel name"><textarea id="t${k}" placeholder="One name per line"></textarea><div class="small" id="cnt${k}"></div></div>`).join('')}
+   <div class="card" id="cc"><label class="pick"><input type="radio" name="w" value="c"> Show everyone combined</label>
+     <div class="small">Automatically merges both wheels.</div><h2 id="cntc" style="margin-top:14px"></h2></div>
+  </div>
+  <h2>2. Spin</h2>
+  <div class="card"><div class="row">
+    <select id="target"></select>
+    <button class="btn" id="spin">🎲 Spin!</button></div>
+    <p><label><input type="checkbox" id="rem"> Remove the winner from the wheel after each spin</label></p>
+    <div class="small">Pick “Random” or choose a specific name so the wheel lands on them.</div></div>
+  <h2>Winners</h2><ul id="log"></ul>
+  <h2>3. Connect to the smartboard</h2>
+  <div class="card"><div class="small">Same computer (two tabs/windows)? It connects automatically. Different devices? Type the 4-digit code shown on the board.</div>
+   <div class="row" style="margin-top:10px"><input type="text" id="codeIn" placeholder="Board code" maxlength="4" inputmode="numeric"><button class="btn alt" id="conn">Connect</button></div>
+   <p class="small"><span class="dot" id="dot"></span><span id="st">Not connected to another device</span></p></div></div>`;
+  const sel=document.querySelector(`input[name=w][value=${saved.active==='c'?'c':saved.active}]`);if(sel)sel.checked=true;
+  ['a','b'].forEach(k=>{$('#n'+k).value=saved[k].name;$('#t'+k).value=saved[k].names});
+  $('#rem').checked=saved.remove;
+
+  function send(m){m.id=uid();bc&&bc.postMessage(m);if(conn&&conn.open)conn.send(m)}
+  function refresh(push){
+    ['a','b'].forEach(k=>$('#cnt'+k).textContent=names(k).length+' names');
+    $('#cntc').textContent=names('c').length+' names combined';
+    ['a','b','c'].forEach(k=>$('#c'+k).classList.toggle('on',saved.active===k));
+    const cur=$('#target').value;
+    $('#target').innerHTML='<option value="">🎲 Random name</option>'+names(saved.active).map((n,i)=>`<option value="${i}">${n.replace(/</g,'&lt;')}</option>`).join('');
+    if(cur&&$('#target option[value="'+cur+'"]'))$('#target').value=cur;
+    save();
+    if(push)send({t:'show',names:names(saved.active),label:label(saved.active)});
+  }
+  document.querySelectorAll('input[name=w]').forEach(r=>r.onchange=()=>{saved.active=r.value;$('#target').value='';refresh(true)});
+  ['a','b'].forEach(k=>{$('#n'+k).oninput=e=>{saved[k].name=e.target.value;refresh(true)};
+    $('#t'+k).oninput=e=>{saved[k].names=e.target.value;refresh(true)}});
+  $('#rem').onchange=e=>{saved.remove=e.target.checked;save()};
+  $('#spin').onclick=()=>{
+    const n=names(saved.active);if(!n.length)return alert('This wheel has no names!');
+    const v=$('#target').value;
+    send({t:'show',names:n,label:label(saved.active)});
+    send({t:'spin',target:v===''?null:+v});
+  };
+  function onMsg(m){
+    if(!m||seen[m.id])return;seen[m.id]=1;
+    if(m.t==='result'){
+      const li=document.createElement('li');li.textContent='🏆 '+m.name;$('#log').prepend(li);
+      if(saved.remove){
+        for(const k of ['a','b']){const arr=saved[k].names.split('\n');const i=arr.findIndex(s=>s.trim()===m.name);
+          if(i>-1){arr.splice(i,1);saved[k].names=arr.join('\n');$('#t'+k).value=saved[k].names;break}}
+        refresh(true);
+      }
+    }
+    if(m.t==='hello')send({t:'show',names:names(saved.active),label:label(saved.active)});
+  }
+  bc&&(bc.onmessage=e=>onMsg(e.data));
+  function status(ok,txt){$('#dot').classList.toggle('ok',ok);$('#st').textContent=txt}
+  $('#conn').onclick=()=>{
+    const code=$('#codeIn').value.trim();if(code.length<4)return;
+    if(typeof Peer==='undefined')return status(false,'Could not load the connection library (check internet).');
+    status(false,'Connecting…');
+    peer&&peer.destroy();peer=new Peer();
+    peer.on('open',()=>{conn=peer.connect('spinwheel-'+code,{reliable:true});
+      conn.on('open',()=>{status(true,'Connected to board '+code);refresh(true)});
+      conn.on('data',onMsg);conn.on('close',()=>status(false,'Disconnected'));});
+    peer.on('error',()=>status(false,'Could not find that board. Check the code.'));
+  };
+  refresh(false);
+  setTimeout(()=>send({t:'show',names:names(saved.active),label:label(saved.active)}),400);
+}
+
+/* ---------------- BOARD ---------------- */
+function board(){
+  $('#app').innerHTML=`<div id="boardRoot"><canvas id="cv"></canvas><div id="win"><div class="t">The winner is…</div><div class="n" id="wn"></div></div><div id="code"></div></div>`;
+  const cv=$('#cv'),ctx=cv.getContext('2d');
+  let items=[],rot=0,spinning=false,seen={},conns=[];
+  const TAU=Math.PI*2;
+  function size(){const s=Math.min(innerWidth,innerHeight)*.94;const d=devicePixelRatio||1;cv.width=cv.height=s*d;cv.style.width=cv.style.height=s+'px';draw()}
+  function draw(){
+    const S=cv.width,c=S/2,R=c*.93;ctx.clearRect(0,0,S,S);
+    if(!items.length){ctx.fillStyle='#9aa0c8';ctx.font=`${S/18}px system-ui`;ctx.textAlign='center';ctx.fillText('Waiting for the teacher…',c,c);return}
+    const seg=TAU/items.length;
+    items.forEach((n,i)=>{
+      const a=rot+i*seg-Math.PI/2;
+      ctx.beginPath();ctx.moveTo(c,c);ctx.arc(c,c,R,a,a+seg);ctx.closePath();
+      ctx.fillStyle=COLORS[i%COLORS.length];if(items.length%COLORS.length===1&&i===items.length-1)ctx.fillStyle='#ffffff55';
+      ctx.fill();ctx.strokeStyle='#0b0d1f';ctx.lineWidth=S/300;ctx.stroke();
+      ctx.save();ctx.translate(c,c);ctx.rotate(a+seg/2);ctx.textAlign='right';ctx.fillStyle='#0b0d1f';
+      const fs=Math.max(S/60,Math.min(S/16,R*seg*.55,S/(8+n.length*.5)));
+      ctx.font=`800 ${fs}px system-ui`;ctx.textBaseline='middle';ctx.fillText(n.length>18?n.slice(0,17)+'…':n,R*.93,0);ctx.restore();
+    });
+    ctx.beginPath();ctx.arc(c,c,S*.05,0,TAU);ctx.fillStyle='#0b0d1f';ctx.fill();ctx.lineWidth=S/120;ctx.strokeStyle='#fff';ctx.stroke();
+    ctx.beginPath();ctx.moveTo(c-S*.035,S*.005);ctx.lineTo(c+S*.035,S*.005);ctx.lineTo(c,S*.09);ctx.closePath();
+    ctx.fillStyle='#fff';ctx.fill();ctx.lineWidth=S/200;ctx.strokeStyle='#0b0d1f';ctx.stroke();
+  }
+  function reply(m){m.id=uid();bc&&bc.postMessage(m);conns.forEach(x=>x.open&&x.send(m))}
+  function spin(target){
+    if(spinning||!items.length)return;spinning=true;$('#win').style.display='none';
+    const n=items.length,seg=TAU/n;
+    const idx=target!=null&&target>=0&&target<n?target:Math.floor(Math.random()*n);
+    const goal=-((idx+.5+(Math.random()-.5)*.7)*seg);
+    const start=rot,delta=((((goal-start)%TAU)+TAU)%TAU)+TAU*(6+Math.floor(Math.random()*3));
+    const dur=6000,t0=performance.now();
+    (function f(t){
+      const p=Math.min(1,(t-t0)/dur),e=1-Math.pow(1-p,4);
+      rot=start+delta*e;draw();
+      if(p<1)requestAnimationFrame(f);
+      else{spinning=false;$('#wn').textContent=items[idx];$('#win').style.display='flex';reply({t:'result',name:items[idx]})}
+    })(t0);
+  }
+  function onMsg(m){
+    if(!m||seen[m.id])return;seen[m.id]=1;
+    if(m.t==='show'){if(spinning)return;items=m.names;$('#win').style.display='none';draw()}
+    if(m.t==='spin')spin(m.target);
+  }
+  bc&&(bc.onmessage=e=>onMsg(e.data));
+  $('#win').onclick=()=>$('#win').style.display='none';
+  cv.ondblclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
+  // cross-device code
+  const code=String(Math.floor(1000+Math.random()*9000));
+  if(typeof Peer!=='undefined'){
+    const p=new Peer('spinwheel-'+code);
+    p.on('open',()=>$('#code').textContent='Board code: '+code);
+    p.on('connection',c=>{conns.push(c);c.on('data',onMsg);c.on('close',()=>conns=conns.filter(x=>x!==c))});
+    p.on('error',()=>{$('#code').textContent=''});
+  }
+  addEventListener('resize',size);size();
+  bc&&bc.postMessage({t:'hello',id:uid()});
+}
+</script>
+</body>
+</html>
