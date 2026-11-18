@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spin the Wheel</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+#root{height:100%;display:flex;align-items:center;justify-content:center;position:relative;background:radial-gradient(circle at 50% 40%,#232863,#0b0d1f)}
+#win{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(5,6,20,.82);flex-direction:column;gap:10px;text-align:center;padding:20px}
+#win .n{font-size:min(14vw,9rem);font-weight:900;background:linear-gradient(135deg,#ffd166,#ff4d8d);-webkit-background-clip:text;background-clip:text;color:transparent;word-break:break-word;animation:pop .5s}
+#win .t{font-size:2rem;color:#9aa0c8}
+@keyframes pop{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
+#code{position:absolute;bottom:8px;right:12px;color:#5a609c;font-size:.8rem}
+</style>
+</head>
+<body>
+<div id="root"><canvas id="cv"></canvas>
+<div id="win"><div class="t">The winner is…</div><div class="n" id="wn"></div></div>
+<div id="code"></div></div>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const COLORS=['#ff4d8d','#7c5cff','#18c5ff','#2ee59d','#ffd166','#ff8a4c','#c15cff','#4cd964'];
+const TAU=Math.PI*2,uid=()=>Date.now()+'-'+Math.random();
+const fix=s=>s.toLowerCase().replace(/[^a-z0-9_-]/g,'');
+const cv=$('#cv'),ctx=cv.getContext('2d');
+let items=[],rot=0,spinning=false,seen={},conns=[];
+function size(){const s=Math.min(innerWidth,innerHeight)*.94,d=devicePixelRatio||1;cv.width=cv.height=s*d;cv.style.width=cv.style.height=s+'px';draw()}
+function draw(){
+  const S=cv.width,c=S/2,R=c*.93;ctx.clearRect(0,0,S,S);
+  if(!items.length){ctx.fillStyle='#9aa0c8';ctx.font=`${S/18}px system-ui`;ctx.textAlign='center';ctx.fillText('Waiting for the teacher…',c,c);return}
+  const seg=TAU/items.length;
+  items.forEach((n,i)=>{
+    const a=rot+i*seg-Math.PI/2;
+    ctx.beginPath();ctx.moveTo(c,c);ctx.arc(c,c,R,a,a+seg);ctx.closePath();
+    ctx.fillStyle=(items.length%COLORS.length===1&&i===items.length-1)?'#ffffff88':COLORS[i%COLORS.length];
+    ctx.fill();ctx.strokeStyle='#0b0d1f';ctx.lineWidth=S/300;ctx.stroke();
+    ctx.save();ctx.translate(c,c);ctx.rotate(a+seg/2);ctx.textAlign='right';ctx.textBaseline='middle';ctx.fillStyle='#0b0d1f';
+    const fs=Math.max(S/60,Math.min(S/16,R*seg*.55,S/(8+n.length*.5)));
+    ctx.font=`800 ${fs}px system-ui`;ctx.fillText(n.length>18?n.slice(0,17)+'…':n,R*.93,0);ctx.restore();
+  });
+  ctx.beginPath();ctx.arc(c,c,S*.05,0,TAU);ctx.fillStyle='#0b0d1f';ctx.fill();ctx.lineWidth=S/120;ctx.strokeStyle='#fff';ctx.stroke();
+  ctx.beginPath();ctx.moveTo(c-S*.035,S*.005);ctx.lineTo(c+S*.035,S*.005);ctx.lineTo(c,S*.09);ctx.closePath();
+  ctx.fillStyle='#fff';ctx.fill();ctx.lineWidth=S/200;ctx.strokeStyle='#0b0d1f';ctx.stroke();
+}
+function reply(m){m.id=uid();conns.forEach(x=>x.open&&x.send(m))}
+function spin(target){
+  if(spinning||!items.length)return;spinning=true;$('#win').style.display='none';
+  const n=items.length,seg=TAU/n;
+  const idx=target!=null&&target>=0&&target<n?target:Math.floor(Math.random()*n);
+  const goal=-((idx+.5+(Math.random()-.5)*.7)*seg);
+  const start=rot,delta=((((goal-start)%TAU)+TAU)%TAU)+TAU*(6+Math.floor(Math.random()*3));
+  const dur=6000,t0=performance.now();
+  (function f(t){
+    const p=Math.min(1,(t-t0)/dur),e=1-Math.pow(1-p,4);
+    rot=start+delta*e;draw();
+    if(p<1)requestAnimationFrame(f);
+    else{spinning=false;$('#wn').textContent=items[idx];$('#win').style.display='flex';reply({t:'result',name:items[idx]})}
+  })(t0);
+}
+function onMsg(m){
+  if(!m||seen[m.id])return;seen[m.id]=1;
+  if(m.t==='show'){if(spinning)return;items=m.names;$('#win').style.display='none';draw()}
+  if(m.t==='spin')spin(m.target);
+}
+$('#win').onclick=()=>$('#win').style.display='none';
+cv.ondblclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
+// board code: ?code=mrsmith keeps the same code every time; otherwise a random one is made
+const code=fix(new URLSearchParams(location.search).get('code')||'')||String(Math.floor(1000+Math.random()*9000));
+function start(){
+  if(typeof Peer==='undefined'){$('#code').textContent='Could not load connection library';return}
+  const p=new Peer('spinwheel-'+code);
+  p.on('open',()=>$('#code').textContent='Board code: '+code);
+  p.on('connection',c=>{conns.push(c);c.on('open',()=>c.send({t:'hello',id:uid()}));
+    c.on('data',onMsg);c.on('close',()=>conns=conns.filter(x=>x!==c))});
+  p.on('error',e=>{if(e.type==='unavailable-id'){$('#code').textContent='Code busy, retrying…';p.destroy();setTimeout(start,4000)}});
+}
+addEventListener('resize',size);size();start();
+</script>
+</body>
+</html>

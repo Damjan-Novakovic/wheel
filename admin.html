@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wheel Admin</title>
+<style>
+:root{--bg:#0f1226;--card:#1b1f3b;--ink:#f4f5ff;--mute:#9aa0c8;--acc:#ff4d8d;--acc2:#7c5cff;--ok:#2ee59d}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:1000px;margin:0 auto;padding:20px}
+h1{margin:0 0 6px}h2{font-size:1.1rem;margin:22px 0 10px}
+.btn{border:0;border-radius:14px;padding:14px 22px;font-size:1rem;font-weight:700;cursor:pointer;color:#fff;background:linear-gradient(135deg,var(--acc),var(--acc2))}
+.btn.alt{background:#2a2f55}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--card);border:2px solid transparent;border-radius:18px;padding:14px}
+.card.on{border-color:var(--acc)}
+label.pick{display:flex;align-items:center;gap:8px;font-weight:700;margin-bottom:8px}
+input[type=text],textarea,select{width:100%;background:#12152c;color:var(--ink);border:1px solid #343a6e;border-radius:10px;padding:10px;font-size:1rem}
+textarea{height:170px;resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.row>*{flex:1;min-width:150px}
+.small{color:var(--mute);font-size:.85rem}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#666;margin-right:6px}.dot.ok{background:var(--ok)}
+#log{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px}
+#log li{background:#2a2f55;border-radius:999px;padding:6px 14px}
+</style>
+</head>
+<body>
+<div class="wrap"><h1>🎛️ Wheel Admin</h1>
+<div class="card" style="margin-top:12px"><div class="small">Board code (use the same one in the board link, e.g. <b>board.html?code=mrsmith</b>)</div>
+ <div class="row" style="margin-top:8px"><input type="text" id="codeIn" placeholder="Board code" maxlength="30"><button class="btn alt" id="conn">Connect</button></div>
+ <p class="small" style="margin-bottom:0"><span class="dot" id="dot"></span><span id="st">Not connected</span></p></div>
+
+<h2>1. Pick which wheel the board shows</h2>
+<div class="grid">
+ <div class="card" id="ca"><label class="pick"><input type="radio" name="w" value="a"> Show this wheel</label>
+  <input type="text" id="na" placeholder="Wheel name"><textarea id="ta" placeholder="One name per line"></textarea><div class="small" id="cnta"></div></div>
+ <div class="card" id="cb"><label class="pick"><input type="radio" name="w" value="b"> Show this wheel</label>
+  <input type="text" id="nb" placeholder="Wheel name"><textarea id="tb" placeholder="One name per line"></textarea><div class="small" id="cntb"></div></div>
+ <div class="card" id="cc"><label class="pick"><input type="radio" name="w" value="c"> Show everyone combined</label>
+  <div class="small">Automatically merges both wheels.</div><h2 id="cntc" style="margin-top:14px"></h2></div>
+</div>
+<h2>2. Spin</h2>
+<div class="card"><div class="row"><select id="target"></select><button class="btn" id="spin">🎲 Spin!</button></div>
+ <p><label><input type="checkbox" id="rem"> Remove the winner from the wheel after each spin</label></p>
+ <div class="small">Pick “Random” or a specific name and the wheel lands on them.</div></div>
+<h2>Winners</h2><ul id="log"></ul>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const uid=()=>Date.now()+'-'+Math.random();
+const clean=t=>t.split('\n').map(s=>s.trim()).filter(Boolean);
+const fix=s=>s.toLowerCase().replace(/[^a-z0-9_-]/g,'');
+const saved=JSON.parse(localStorage.getItem('wheels')||'null')||{a:{name:'Class A',names:'Ana\nBen\nCara\nDavid'},b:{name:'Class B',names:'Eli\nFay\nGus\nHana'},active:'a',remove:false};
+const save=()=>localStorage.setItem('wheels',JSON.stringify(saved));
+const names=k=>{const a=clean(saved.a.names),b=clean(saved.b.names);return k==='a'?a:k==='b'?b:[...a,...b]};
+const label=k=>k==='a'?saved.a.name:k==='b'?saved.b.name:'Everyone';
+let peer=null,conn=null,timer=null,seen={};
+document.querySelector(`input[name=w][value=${saved.active}]`).checked=true;
+['a','b'].forEach(k=>{$('#n'+k).value=saved[k].name;$('#t'+k).value=saved[k].names});
+$('#rem').checked=saved.remove;$('#codeIn').value=localStorage.getItem('code')||'';
+
+function send(m){m.id=uid();if(conn&&conn.open)conn.send(m)}
+function show(){send({t:'show',names:names(saved.active),label:label(saved.active)})}
+function refresh(push){
+  ['a','b'].forEach(k=>$('#cnt'+k).textContent=names(k).length+' names');
+  $('#cntc').textContent=names('c').length+' names combined';
+  ['a','b','c'].forEach(k=>$('#c'+k).classList.toggle('on',saved.active===k));
+  const cur=$('#target').value;
+  $('#target').innerHTML='<option value="">🎲 Random name</option>'+names(saved.active).map((n,i)=>`<option value="${i}">${n.replace(/</g,'&lt;')}</option>`).join('');
+  if(cur)$('#target').value=cur;
+  save();if(push)show();
+}
+document.querySelectorAll('input[name=w]').forEach(r=>r.onchange=()=>{saved.active=r.value;$('#target').value='';refresh(true)});
+['a','b'].forEach(k=>{$('#n'+k).oninput=e=>{saved[k].name=e.target.value;refresh(true)};$('#t'+k).oninput=e=>{saved[k].names=e.target.value;refresh(true)}});
+$('#rem').onchange=e=>{saved.remove=e.target.checked;save()};
+$('#spin').onclick=()=>{
+  const n=names(saved.active);if(!n.length)return alert('This wheel has no names!');
+  if(!(conn&&conn.open))return alert('Not connected to the board yet.');
+  const v=$('#target').value;show();send({t:'spin',target:v===''?null:+v});
+};
+function onMsg(m){
+  if(!m||seen[m.id])return;seen[m.id]=1;
+  if(m.t==='result'){
+    const li=document.createElement('li');li.textContent='🏆 '+m.name;$('#log').prepend(li);
+    if(saved.remove){
+      for(const k of ['a','b']){const arr=saved[k].names.split('\n');const i=arr.findIndex(s=>s.trim()===m.name);
+        if(i>-1){arr.splice(i,1);saved[k].names=arr.join('\n');$('#t'+k).value=saved[k].names;break}}
+      refresh(true);
+    }
+  }
+  if(m.t==='hello')show();
+}
+function status(ok,txt){$('#dot').classList.toggle('ok',ok);$('#st').textContent=txt}
+function retry(){conn=null;status(false,'Looking for the board…');clearTimeout(timer);timer=setTimeout(connect,3000)}
+function connect(){
+  const code=fix($('#codeIn').value);if(!code)return;
+  $('#codeIn').value=code;localStorage.setItem('code',code);clearTimeout(timer);
+  if(typeof Peer==='undefined')return status(false,'Could not load the connection library (check internet).');
+  status(false,'Connecting…');try{peer&&peer.destroy()}catch(e){}
+  peer=new Peer();
+  peer.on('open',()=>{conn=peer.connect('spinwheel-'+code,{reliable:true});
+    conn.on('open',()=>{status(true,'Connected to board “'+code+'”');show()});
+    conn.on('data',onMsg);conn.on('close',retry)});
+  peer.on('error',retry);
+}
+$('#conn').onclick=connect;
+refresh(false);
+if($('#codeIn').value)connect();
+</script>
+</body>
+</html>
